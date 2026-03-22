@@ -22,22 +22,24 @@ export const BeatsCarousel = ({ beats, onBeatSelect }) => {
   // Calculate duration based on number of beats (slower = more premium feel)
   const scrollDuration = Math.max(40, beats.length * 10);
 
-  const handleMouseEnter = useCallback((beat, index) => {
-    setIsPaused(true);
-    // Debounce 150ms before opening modal
-    hoverTimeoutRef.current = setTimeout(() => {
-      onBeatSelect(beat, index % beats.length);
-    }, 150);
+  const handleClick = useCallback((beat, index) => {
+    onBeatSelect(beat, index % beats.length);
   }, [beats.length, onBeatSelect]);
+
+  const handleMouseEnter = useCallback(() => {
+    setIsPaused(true);
+  }, []);
 
   const handleMouseLeave = useCallback(() => {
     setIsPaused(false);
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
   }, []);
 
   const getCoverUrl = (beat) => {
+    // First check for direct cover_url (for demo beats)
+    if (beat.cover_url) {
+      return beat.cover_url;
+    }
+    // Then check for storage path
     if (beat.cover_path) {
       return `${API}/files/${beat.cover_path}`;
     }
@@ -71,7 +73,8 @@ export const BeatsCarousel = ({ beats, onBeatSelect }) => {
             key={`${beat.id}-${index}`}
             beat={beat}
             coverUrl={getCoverUrl(beat)}
-            onMouseEnter={() => handleMouseEnter(beat, index)}
+            onClick={() => handleClick(beat, index)}
+            onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
           />
         ))}
@@ -84,12 +87,13 @@ export const BeatsCarousel = ({ beats, onBeatSelect }) => {
   );
 };
 
-const BeatCard = ({ beat, coverUrl, onMouseEnter, onMouseLeave }) => {
+const BeatCard = ({ beat, coverUrl, onClick, onMouseEnter, onMouseLeave }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
 
   return (
     <motion.button
+      onClick={onClick}
       onMouseEnter={() => {
         setIsHovered(true);
         onMouseEnter();

@@ -148,6 +148,9 @@ export const BeatModal = ({
   };
 
   const getCoverUrl = () => {
+    if (beat?.cover_url) {
+      return beat.cover_url;
+    }
     if (beat?.cover_path) {
       return `${API}/files/${beat.cover_path}`;
     }
