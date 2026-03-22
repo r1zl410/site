@@ -158,6 +158,11 @@ export const BeatModal = ({
   };
 
   const getAudioUrl = () => {
+    // First check for direct audio_url (for demo beats)
+    if (beat?.audio_url) {
+      return beat.audio_url;
+    }
+    // Then check for storage path
     if (beat?.audio_path) {
       return `${API}/files/${beat.audio_path}`;
     }

@@ -108,6 +108,7 @@ class BeatResponse(BaseModel):
     cover_path: str = ""
     audio_path: str = ""
     cover_url: Optional[str] = None
+    audio_url: Optional[str] = None
     price_mp3: float
     price_wav: float
     price_stems: float
