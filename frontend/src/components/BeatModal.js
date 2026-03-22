@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Play, Pause, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Play, Pause, ChevronLeft, ChevronRight, ExternalLink, Mail } from "lucide-react";
 import { PayPalButtons } from "@paypal/react-paypal-js";
 import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -18,9 +20,26 @@ export const BeatModal = ({
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedPriceType, setSelectedPriceType] = useState("mp3");
-  const [showPayPal, setShowPayPal] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [paypalConfig, setPaypalConfig] = useState(null);
+  const [buyerEmail, setBuyerEmail] = useState("");
+  const [paymentSent, setPaymentSent] = useState(false);
   const audioRef = useRef(null);
   const progressRef = useRef(null);
+
+  // Fetch PayPal config on mount
+  useEffect(() => {
+    async function fetchConfig() {
+      try {
+        const response = await fetch(`${API}/paypal/config`);
+        const data = await response.json();
+        setPaypalConfig(data);
+      } catch (error) {
+        console.error("Failed to fetch PayPal config:", error);
+      }
+    }
+    fetchConfig();
+  }, []);
 
   const navigatePrev = useCallback(() => {
     if (currentIndex > 0) {
@@ -75,7 +94,8 @@ export const BeatModal = ({
       setProgress(0);
       setCurrentTime(0);
     }
-    setShowPayPal(false);
+    setShowPayment(false);
+    setPaymentSent(false);
     setSelectedPriceType("mp3");
   }, [beat?.id]);
 
@@ -158,15 +178,39 @@ export const BeatModal = ({
   };
 
   const getAudioUrl = () => {
-    // First check for direct audio_url (for demo beats)
     if (beat?.audio_url) {
       return beat.audio_url;
     }
-    // Then check for storage path
     if (beat?.audio_path) {
       return `${API}/files/${beat.audio_path}`;
     }
     return null;
+  };
+
+  const handlePayPalMeClick = async () => {
+    if (!paypalConfig?.paypal_me_username) {
+      toast.error("Payment not configured");
+      return;
+    }
+
+    const price = getSelectedPrice();
+    const description = `${beat.title} - ${selectedPriceType.toUpperCase()}`;
+    
+    // Record the pending payment
+    try {
+      await fetch(`${API}/payments/record-manual?beat_id=${beat.id}&price_type=${selectedPriceType}&buyer_email=${encodeURIComponent(buyerEmail)}`, {
+        method: "POST"
+      });
+    } catch (error) {
+      console.error("Failed to record payment:", error);
+    }
+
+    // Open PayPal.me link
+    const paypalMeUrl = `https://paypal.me/${paypalConfig.paypal_me_username}/${price}USD`;
+    window.open(paypalMeUrl, '_blank');
+    
+    setPaymentSent(true);
+    toast.success("PayPal opened! Complete the payment there.");
   };
 
   const handlePaymentSuccess = async (orderID) => {
@@ -183,7 +227,7 @@ export const BeatModal = ({
       
       if (response.ok) {
         toast.success("Payment successful! Check your email for download link.");
-        setShowPayPal(false);
+        setShowPayment(false);
       } else {
         toast.error("Payment recording failed. Please contact support.");
       }
@@ -193,6 +237,8 @@ export const BeatModal = ({
   };
 
   if (!beat) return null;
+
+  const usePayPalMe = paypalConfig?.use_paypal_me || !paypalConfig?.client_id;
 
   return (
     <AnimatePresence>
@@ -251,7 +297,7 @@ export const BeatModal = ({
 
         {/* Modal content */}
         <motion.div 
-          className="relative z-10 flex flex-col items-center gap-8 px-6 max-w-lg w-full"
+          className="relative z-10 flex flex-col items-center gap-8 px-6 max-w-lg w-full max-h-[90vh] overflow-y-auto"
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           exit={{ scale: 0.9, opacity: 0 }}
@@ -259,7 +305,7 @@ export const BeatModal = ({
         >
           {/* Album art */}
           <motion.div 
-            className="relative w-72 h-72 md:w-96 md:h-96 rounded-2xl overflow-hidden"
+            className="relative w-72 h-72 md:w-96 md:h-96 rounded-2xl overflow-hidden flex-shrink-0"
             style={{
               boxShadow: "0 50px 100px -20px rgba(0, 0, 0, 0.8)"
             }}
@@ -339,9 +385,9 @@ export const BeatModal = ({
           )}
 
           {/* Pricing options */}
-          {!showPayPal ? (
+          {!showPayment ? (
             <div className="w-full space-y-4">
-              <div className="flex gap-3 justify-center">
+              <div className="flex gap-3 justify-center flex-wrap">
                 {[
                   { type: "mp3", label: "MP3", price: beat.price_mp3 },
                   { type: "wav", label: "WAV", price: beat.price_wav },
@@ -350,7 +396,7 @@ export const BeatModal = ({
                   <button
                     key={type}
                     onClick={() => setSelectedPriceType(type)}
-                    className={`px-6 py-3 rounded-full text-sm font-medium uppercase tracking-wider ${
+                    className={`px-5 py-2.5 rounded-full text-sm font-medium uppercase tracking-wider ${
                       selectedPriceType === type 
                         ? "bg-white text-black" 
                         : "bg-white/10 text-white/70 hover:bg-white/20 hover:text-white"
@@ -364,17 +410,96 @@ export const BeatModal = ({
 
               {/* Purchase button */}
               <button
-                onClick={() => setShowPayPal(true)}
+                onClick={() => setShowPayment(true)}
                 className="w-full py-4 bg-white text-black font-semibold rounded-full hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98]"
                 data-testid="purchase-btn"
               >
                 Purchase for {formatPrice(getSelectedPrice())}
               </button>
             </div>
-          ) : (
+          ) : paymentSent ? (
+            /* Payment confirmation screen */
+            <div className="w-full space-y-4 text-center">
+              <div className="bg-green-500/20 border border-green-500/30 rounded-xl p-6">
+                <h3 className="text-green-400 font-semibold text-lg mb-2">Payment Initiated!</h3>
+                <p className="text-white/70 text-sm mb-4">
+                  Complete the payment in the PayPal window that opened.
+                  After payment, send your email to receive the beat files.
+                </p>
+                <a 
+                  href={`mailto:r1zl410@gmail.com?subject=Beat Purchase: ${beat.title}&body=I purchased ${beat.title} (${selectedPriceType.toUpperCase()}) for ${formatPrice(getSelectedPrice())}. My PayPal email is: ${buyerEmail}`}
+                  className="inline-flex items-center gap-2 bg-white text-black px-6 py-3 rounded-full font-semibold hover:bg-white/90"
+                >
+                  <Mail className="h-4 w-4" />
+                  Send Confirmation Email
+                </a>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPayment(false);
+                  setPaymentSent(false);
+                }}
+                className="text-white/50 hover:text-white text-sm"
+              >
+                ← Back
+              </button>
+            </div>
+          ) : usePayPalMe ? (
+            /* PayPal.me payment flow (for personal accounts) */
             <div className="w-full space-y-4">
               <button
-                onClick={() => setShowPayPal(false)}
+                onClick={() => setShowPayment(false)}
+                className="text-white/50 hover:text-white text-sm"
+                data-testid="back-to-options-btn"
+              >
+                ← Back to options
+              </button>
+              
+              <div className="bg-white/5 border border-white/10 rounded-xl p-6 space-y-4">
+                <h3 className="text-white font-semibold text-center">Complete Purchase</h3>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="buyerEmail" className="text-white/70">Your Email (to receive beat files)</Label>
+                  <Input
+                    id="buyerEmail"
+                    type="email"
+                    value={buyerEmail}
+                    onChange={(e) => setBuyerEmail(e.target.value)}
+                    placeholder="your@email.com"
+                    className="bg-white/5 border-white/20 text-white placeholder:text-white/30"
+                    data-testid="buyer-email-input"
+                  />
+                </div>
+
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 text-center">
+                  <p className="text-white/70 text-sm mb-2">You'll pay:</p>
+                  <p className="text-2xl font-bold text-white">{formatPrice(getSelectedPrice())}</p>
+                  <p className="text-white/50 text-xs mt-1">{beat.title} - {selectedPriceType.toUpperCase()}</p>
+                </div>
+
+                <button
+                  onClick={handlePayPalMeClick}
+                  disabled={!buyerEmail}
+                  className="w-full py-4 bg-[#0070ba] text-white font-semibold rounded-full hover:bg-[#005ea6] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  data-testid="paypal-me-btn"
+                >
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944 3.72a.77.77 0 0 1 .757-.65h6.765c2.237 0 3.944.62 5.07 1.845.33.357.594.749.785 1.17.192.422.311.877.352 1.358.006.065.009.13.009.193 0 .065-.003.129-.009.193-.182 1.969-1.2 3.327-2.664 4.1-.83.44-1.778.685-2.818.748.478.318.87.783 1.124 1.363.247.564.383 1.199.407 1.882l.12 5.608a.64.64 0 0 1-.633.707h-4.05a.642.642 0 0 1-.633-.707l.1-4.696c.03-.627-.127-1.095-.469-1.393-.34-.299-.852-.448-1.52-.448H8.39a.77.77 0 0 0-.757.65l-1.19 6.945a.641.641 0 0 1-.633.54l.266-.001Z"/>
+                  </svg>
+                  Pay with PayPal
+                  <ExternalLink className="h-4 w-4" />
+                </button>
+
+                <p className="text-white/40 text-xs text-center">
+                  You'll be redirected to PayPal to complete the payment
+                </p>
+              </div>
+            </div>
+          ) : (
+            /* Standard PayPal Buttons (for business accounts) */
+            <div className="w-full space-y-4">
+              <button
+                onClick={() => setShowPayment(false)}
                 className="text-white/50 hover:text-white text-sm"
                 data-testid="back-to-options-btn"
               >

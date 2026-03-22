@@ -39,10 +39,11 @@ EMERGENT_KEY = os.environ.get('EMERGENT_LLM_KEY')
 APP_NAME = "r1zl410-beats"
 storage_key = None
 
-# PayPal Configuration
+# PayPal Configuration (supports PayPal.me for personal accounts)
 PAYPAL_CLIENT_ID = os.environ.get('PAYPAL_CLIENT_ID', '')
 PAYPAL_SECRET = os.environ.get('PAYPAL_SECRET', '')
 PAYPAL_MODE = os.environ.get('PAYPAL_MODE', 'sandbox')
+PAYPAL_ME_USERNAME = os.environ.get('PAYPAL_ME_USERNAME', '')  # Your PayPal.me username
 
 # Rate limiting storage (in production use Redis)
 login_attempts = defaultdict(list)
@@ -467,6 +468,15 @@ async def serve_file(file_path: str):
 async def get_paypal_client_id():
     return {"client_id": PAYPAL_CLIENT_ID}
 
+@api_router.get("/paypal/config")
+async def get_paypal_config():
+    """Get PayPal configuration - supports both API and PayPal.me"""
+    return {
+        "client_id": PAYPAL_CLIENT_ID,
+        "paypal_me_username": PAYPAL_ME_USERNAME,
+        "use_paypal_me": bool(PAYPAL_ME_USERNAME and not PAYPAL_CLIENT_ID)
+    }
+
 @api_router.post("/payments/create")
 async def create_payment(data: PaymentCreate):
     beat = await db.beats.find_one({"id": data.beat_id}, {"_id": 0})
@@ -495,6 +505,40 @@ async def create_payment(data: PaymentCreate):
     await db.payments.insert_one(payment_doc)
     
     return {"payment_id": payment_id, "status": "completed"}
+
+@api_router.post("/payments/record-manual")
+async def record_manual_payment(
+    beat_id: str,
+    price_type: str,
+    buyer_email: Optional[str] = None
+):
+    """Record a payment made via PayPal.me (manual confirmation)"""
+    beat = await db.beats.find_one({"id": beat_id}, {"_id": 0})
+    if not beat:
+        raise HTTPException(status_code=404, detail="Beat not found")
+    
+    price_map = {
+        "mp3": beat["price_mp3"],
+        "wav": beat["price_wav"],
+        "stems": beat["price_stems"]
+    }
+    price = price_map.get(price_type, beat["price_mp3"])
+    
+    payment_id = str(uuid.uuid4())
+    payment_doc = {
+        "id": payment_id,
+        "beat_id": beat_id,
+        "beat_title": beat.get("title", ""),
+        "price_type": price_type,
+        "amount": price,
+        "payment_method": "paypal_me",
+        "buyer_email": buyer_email,
+        "status": "pending_confirmation",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.payments.insert_one(payment_doc)
+    
+    return {"payment_id": payment_id, "status": "pending_confirmation"}
 
 @api_router.get("/payments", response_model=List[dict])
 async def get_payments(admin: dict = Depends(get_current_admin)):
