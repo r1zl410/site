@@ -9,6 +9,8 @@ import AdminLogin from "@/pages/AdminLogin";
 import AdminDashboard from "@/pages/AdminDashboard";
 import AdminUpload from "@/pages/AdminUpload";
 import AdminUploadPack from "@/pages/AdminUploadPack";
+import AdminEditBeat from "@/pages/AdminEditBeat";
+import AdminEditPack from "@/pages/AdminEditPack";
 
 const PAYPAL_CLIENT_ID = process.env.REACT_APP_PAYPAL_CLIENT_ID || "test";
 
@@ -24,6 +26,8 @@ function App() {
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/upload" element={<AdminUpload />} />
           <Route path="/admin/upload-pack" element={<AdminUploadPack />} />
+          <Route path="/admin/edit-beat/:beatId" element={<AdminEditBeat />} />
+          <Route path="/admin/edit-pack/:packId" element={<AdminEditPack />} />
         </Routes>
         <Toaster position="bottom-right" theme="dark" />
       </BrowserRouter>

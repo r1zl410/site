@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, File, UploadFile, Header, Response, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, File, UploadFile, Form, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -6,10 +6,11 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import re
-import io
-import base64
+import asyncio
+import random
+import string
 from pathlib import Path
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, validator
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -17,8 +18,7 @@ from collections import defaultdict
 import jwt
 import bcrypt
 import requests
-import pyotp
-import qrcode
+import resend
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -39,28 +39,34 @@ EMERGENT_KEY = os.environ.get('EMERGENT_LLM_KEY')
 APP_NAME = "r1zl410-beats"
 storage_key = None
 
-# PayPal Configuration (supports PayPal.me for personal accounts)
+# PayPal Configuration
 PAYPAL_CLIENT_ID = os.environ.get('PAYPAL_CLIENT_ID', '')
 PAYPAL_SECRET = os.environ.get('PAYPAL_SECRET', '')
 PAYPAL_MODE = os.environ.get('PAYPAL_MODE', 'sandbox')
-PAYPAL_ME_USERNAME = os.environ.get('PAYPAL_ME_USERNAME', '')  # Your PayPal.me username
+PAYPAL_ME_USERNAME = os.environ.get('PAYPAL_ME_USERNAME', '')
 
-# Rate limiting storage (in production use Redis)
+# Email Configuration
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+resend.api_key = RESEND_API_KEY
+
+# Rate limiting storage
 login_attempts = defaultdict(list)
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+# Verification codes storage (in production use Redis with TTL)
+verification_codes = {}
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ============== SECURITY HELPERS ==============
-def validate_password_strength(password: str) -> tuple[bool, str]:
-    """Validate password meets security requirements"""
+def validate_password_strength(password: str) -> tuple:
     if len(password) < 8:
         return False, "Password must be at least 8 characters"
     if not re.search(r'[A-Z]', password):
@@ -70,57 +76,62 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
     if not re.search(r'\d', password):
         return False, "Password must contain at least one number"
     if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
-        return False, "Password must contain at least one special character (!@#$%^&*)"
+        return False, "Password must contain at least one special character"
     return True, "Password is strong"
 
-def check_rate_limit(identifier: str) -> tuple[bool, int]:
-    """Check if identifier is rate limited. Returns (is_allowed, seconds_until_unlock)"""
+def check_rate_limit(identifier: str) -> tuple:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=LOCKOUT_MINUTES)
-    
-    # Clean old attempts
     login_attempts[identifier] = [t for t in login_attempts[identifier] if t > cutoff]
-    
     if len(login_attempts[identifier]) >= MAX_LOGIN_ATTEMPTS:
         oldest = min(login_attempts[identifier])
         unlock_time = oldest + timedelta(minutes=LOCKOUT_MINUTES)
         seconds_left = int((unlock_time - now).total_seconds())
         return False, max(0, seconds_left)
-    
     return True, 0
 
 def record_login_attempt(identifier: str):
-    """Record a failed login attempt"""
     login_attempts[identifier].append(datetime.now(timezone.utc))
 
 def clear_login_attempts(identifier: str):
-    """Clear login attempts after successful login"""
     login_attempts[identifier] = []
 
-def generate_2fa_secret() -> str:
-    """Generate a new 2FA secret"""
-    return pyotp.random_base32()
+def generate_verification_code() -> str:
+    return ''.join(random.choices(string.digits, k=6))
 
-def generate_2fa_qr(secret: str, email: str) -> str:
-    """Generate QR code for 2FA setup, returns base64 image"""
-    totp = pyotp.TOTP(secret)
-    uri = totp.provisioning_uri(name=email, issuer_name="r1zl410 Beats")
+async def send_verification_email(email: str, code: str) -> bool:
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set")
+        return False
     
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(uri)
-    qr.make(fit=True)
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #000; text-align: center;">r1zl410</h2>
+        <p style="color: #666; text-align: center;">Il tuo codice di verifica:</p>
+        <div style="background: #f5f5f5; padding: 20px; text-align: center; border-radius: 10px; margin: 20px 0;">
+            <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #000;">{code}</span>
+        </div>
+        <p style="color: #999; font-size: 12px; text-align: center;">
+            Questo codice scade tra 10 minuti.<br>
+            Se non hai richiesto questo codice, ignora questa email.
+        </p>
+    </div>
+    """
     
-    img = qr.make_image(fill_color="black", back_color="white")
-    buffer = io.BytesIO()
-    img.save(buffer, format='PNG')
-    buffer.seek(0)
+    params = {
+        "from": SENDER_EMAIL,
+        "to": [email],
+        "subject": f"r1zl410 - Codice di verifica: {code}",
+        "html": html_content
+    }
     
-    return base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-def verify_2fa_code(secret: str, code: str) -> bool:
-    """Verify a 2FA code"""
-    totp = pyotp.TOTP(secret)
-    return totp.verify(code, valid_window=1)  # Allow 30 second window
+    try:
+        await asyncio.to_thread(resend.Emails.send, params)
+        logger.info(f"Verification email sent to {email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        return False
 
 # ============== OBJECT STORAGE ==============
 def init_storage():
@@ -128,7 +139,7 @@ def init_storage():
     if storage_key:
         return storage_key
     if not EMERGENT_KEY:
-        logger.warning("EMERGENT_LLM_KEY not set, file uploads will fail")
+        logger.warning("EMERGENT_LLM_KEY not set")
         return None
     try:
         resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
@@ -177,21 +188,10 @@ class AdminCreate(BaseModel):
 class AdminLogin(BaseModel):
     email: str
     password: str
-    totp_code: Optional[str] = None
 
-class TwoFactorSetup(BaseModel):
-    totp_code: str
-
-class TwoFactorVerify(BaseModel):
+class VerifyCode(BaseModel):
     email: str
-    password: str
-    totp_code: str
-
-class BeatCreate(BaseModel):
-    title: str
-    price_mp3: float = 29.99
-    price_wav: float = 49.99
-    price_stems: float = 99.99
+    code: str
 
 class BeatResponse(BaseModel):
     id: str
@@ -208,11 +208,6 @@ class BeatResponse(BaseModel):
     is_sold: bool
     created_at: str
 
-class PaymentCreate(BaseModel):
-    beat_id: str
-    price_type: str  # mp3, wav, stems
-    paypal_order_id: str
-
 class PackResponse(BaseModel):
     id: str
     title: str
@@ -222,6 +217,11 @@ class PackResponse(BaseModel):
     price: float
     created_at: str
 
+class PaymentCreate(BaseModel):
+    beat_id: str
+    price_type: str
+    paypal_order_id: str
+
 # ============== AUTH HELPERS ==============
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -229,10 +229,9 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_token(admin_id: str, is_2fa_verified: bool = True) -> str:
+def create_token(admin_id: str) -> str:
     payload = {
         'admin_id': admin_id,
-        '2fa_verified': is_2fa_verified,
         'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -252,8 +251,6 @@ async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(
     payload = verify_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    if not payload.get('2fa_verified', False):
-        raise HTTPException(status_code=401, detail="2FA verification required")
     admin = await db.admins.find_one({"id": payload['admin_id']}, {"_id": 0})
     if not admin:
         raise HTTPException(status_code=401, detail="Admin not found")
@@ -261,135 +258,102 @@ async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(
 
 # ============== AUTH ROUTES ==============
 @api_router.post("/admin/register")
-async def register_admin(data: AdminCreate, request: Request):
-    """Register admin with strong password - returns 2FA setup QR code"""
-    # Check if any admin exists
+async def register_admin(data: AdminCreate):
     existing = await db.admins.find_one({})
     if existing:
         raise HTTPException(status_code=400, detail="Admin already exists. Only one admin allowed.")
     
-    # Validate password strength
     is_valid, message = validate_password_strength(data.password)
     if not is_valid:
         raise HTTPException(status_code=400, detail=message)
-    
-    # Generate 2FA secret
-    totp_secret = generate_2fa_secret()
     
     admin_id = str(uuid.uuid4())
     admin_doc = {
         "id": admin_id,
         "email": data.email,
         "password": hash_password(data.password),
-        "totp_secret": totp_secret,
-        "totp_enabled": False,  # Will be enabled after first verification
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "last_login": None,
-        "login_ip": request.client.host if request.client else None
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.admins.insert_one(admin_doc)
     
-    # Generate QR code for 2FA setup
-    qr_code = generate_2fa_qr(totp_secret, data.email)
-    
-    # Create temporary token (not fully authenticated until 2FA setup)
-    temp_token = create_token(admin_id, is_2fa_verified=False)
-    
-    return {
-        "message": "Account created. Please set up 2FA using the QR code.",
-        "temp_token": temp_token,
-        "qr_code": qr_code,
-        "manual_code": totp_secret,
-        "requires_2fa_setup": True
+    # Send verification code
+    code = generate_verification_code()
+    verification_codes[data.email] = {
+        "code": code,
+        "admin_id": admin_id,
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=10)
     }
-
-@api_router.post("/admin/verify-2fa-setup")
-async def verify_2fa_setup(data: TwoFactorSetup, credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify 2FA setup with initial code"""
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
     
-    payload = verify_token(credentials.credentials)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    
-    admin = await db.admins.find_one({"id": payload['admin_id']}, {"_id": 0})
-    if not admin:
-        raise HTTPException(status_code=401, detail="Admin not found")
-    
-    if admin.get('totp_enabled'):
-        raise HTTPException(status_code=400, detail="2FA already enabled")
-    
-    # Verify the code
-    if not verify_2fa_code(admin['totp_secret'], data.totp_code):
-        raise HTTPException(status_code=400, detail="Invalid 2FA code. Please try again.")
-    
-    # Enable 2FA
-    await db.admins.update_one(
-        {"id": admin['id']},
-        {"$set": {"totp_enabled": True}}
-    )
-    
-    # Create fully authenticated token
-    token = create_token(admin['id'], is_2fa_verified=True)
+    email_sent = await send_verification_email(data.email, code)
     
     return {
-        "message": "2FA setup complete! Your account is now secure.",
-        "token": token
+        "message": "Account created. Check your email for verification code.",
+        "email_sent": email_sent,
+        "requires_verification": True
     }
 
 @api_router.post("/admin/login")
 async def login_admin(data: AdminLogin, request: Request):
-    """Login with email, password, and 2FA code"""
     client_ip = request.client.host if request.client else "unknown"
     identifier = f"{data.email}:{client_ip}"
     
-    # Check rate limit
     is_allowed, seconds_left = check_rate_limit(identifier)
     if not is_allowed:
-        raise HTTPException(
-            status_code=429, 
-            detail=f"Too many login attempts. Please try again in {seconds_left} seconds."
-        )
+        raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {seconds_left} seconds.")
     
     admin = await db.admins.find_one({"email": data.email.lower()}, {"_id": 0})
     
     if not admin or not verify_password(data.password, admin["password"]):
         record_login_attempt(identifier)
         attempts_left = MAX_LOGIN_ATTEMPTS - len(login_attempts[identifier])
-        raise HTTPException(
-            status_code=401, 
-            detail=f"Invalid credentials. {attempts_left} attempts remaining."
-        )
+        raise HTTPException(status_code=401, detail=f"Invalid credentials. {attempts_left} attempts remaining.")
     
-    # Check if 2FA is enabled
-    if admin.get('totp_enabled'):
-        if not data.totp_code:
-            raise HTTPException(status_code=400, detail="2FA code required")
-        
-        if not verify_2fa_code(admin['totp_secret'], data.totp_code):
-            record_login_attempt(identifier)
-            raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    # Send verification code
+    code = generate_verification_code()
+    verification_codes[data.email.lower()] = {
+        "code": code,
+        "admin_id": admin["id"],
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=10)
+    }
     
-    # Clear rate limit on successful login
+    email_sent = await send_verification_email(data.email, code)
+    
+    return {
+        "message": "Verification code sent to your email",
+        "email_sent": email_sent,
+        "requires_verification": True
+    }
+
+@api_router.post("/admin/verify")
+async def verify_admin_code(data: VerifyCode, request: Request):
+    email = data.email.lower()
+    client_ip = request.client.host if request.client else "unknown"
+    identifier = f"{email}:{client_ip}"
+    
+    stored = verification_codes.get(email)
+    if not stored:
+        raise HTTPException(status_code=400, detail="No verification code found. Please login again.")
+    
+    if datetime.now(timezone.utc) > stored["expires"]:
+        del verification_codes[email]
+        raise HTTPException(status_code=400, detail="Code expired. Please login again.")
+    
+    if stored["code"] != data.code:
+        record_login_attempt(identifier)
+        raise HTTPException(status_code=401, detail="Invalid verification code")
+    
+    # Clear everything on success
+    del verification_codes[email]
     clear_login_attempts(identifier)
     
     # Update last login
     await db.admins.update_one(
-        {"id": admin['id']},
-        {"$set": {
-            "last_login": datetime.now(timezone.utc).isoformat(),
-            "login_ip": client_ip
-        }}
+        {"id": stored["admin_id"]},
+        {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
     )
     
-    token = create_token(admin["id"], is_2fa_verified=True)
-    
-    return {
-        "token": token, 
-        "admin_id": admin["id"],
-        "message": "Login successful"
-    }
+    token = create_token(stored["admin_id"])
+    return {"token": token, "message": "Login successful"}
 
 @api_router.get("/admin/check")
 async def check_admin_exists():
@@ -398,13 +362,7 @@ async def check_admin_exists():
 
 @api_router.get("/admin/me")
 async def get_admin_profile(admin: dict = Depends(get_current_admin)):
-    return {
-        "email": admin["email"], 
-        "id": admin["id"],
-        "totp_enabled": admin.get("totp_enabled", False),
-        "last_login": admin.get("last_login"),
-        "created_at": admin.get("created_at")
-    }
+    return {"email": admin["email"], "id": admin["id"]}
 
 # ============== BEAT ROUTES ==============
 @api_router.get("/beats", response_model=List[BeatResponse])
@@ -421,25 +379,23 @@ async def get_beat(beat_id: str):
 
 @api_router.post("/beats", response_model=BeatResponse)
 async def create_beat(
-    title: str = File(...),
-    bpm: str = File("140"),
-    key: str = File("C Minor"),
-    price_mp3: float = File(29.99),
-    price_wav: float = File(49.99),
-    price_stems: float = File(99.99),
+    title: str = Form(...),
+    bpm: str = Form("140"),
+    key: str = Form("C Minor"),
+    price_mp3: float = Form(24.99),
+    price_wav: float = Form(39.99),
+    price_stems: float = Form(99.99),
     cover: UploadFile = File(...),
     audio: UploadFile = File(...),
     admin: dict = Depends(get_current_admin)
 ):
     beat_id = str(uuid.uuid4())
     
-    # Upload cover image
     cover_ext = cover.filename.split(".")[-1] if "." in cover.filename else "jpg"
     cover_path = f"{APP_NAME}/covers/{beat_id}.{cover_ext}"
     cover_data = await cover.read()
     put_object(cover_path, cover_data, cover.content_type or "image/jpeg")
     
-    # Upload audio file
     audio_ext = audio.filename.split(".")[-1] if "." in audio.filename else "mp3"
     audio_path = f"{APP_NAME}/audio/{beat_id}.{audio_ext}"
     audio_data = await audio.read()
@@ -460,6 +416,51 @@ async def create_beat(
     }
     await db.beats.insert_one(beat_doc)
     return beat_doc
+
+@api_router.put("/beats/{beat_id}")
+async def update_beat(
+    beat_id: str,
+    title: str = Form(None),
+    bpm: str = Form(None),
+    key: str = Form(None),
+    price_mp3: float = Form(None),
+    price_wav: float = Form(None),
+    price_stems: float = Form(None),
+    cover: UploadFile = File(None),
+    audio: UploadFile = File(None),
+    admin: dict = Depends(get_current_admin)
+):
+    beat = await db.beats.find_one({"id": beat_id}, {"_id": 0})
+    if not beat:
+        raise HTTPException(status_code=404, detail="Beat not found")
+    
+    update_data = {}
+    if title: update_data["title"] = title
+    if bpm: update_data["bpm"] = bpm
+    if key: update_data["key"] = key
+    if price_mp3 is not None: update_data["price_mp3"] = float(price_mp3)
+    if price_wav is not None: update_data["price_wav"] = float(price_wav)
+    if price_stems is not None: update_data["price_stems"] = float(price_stems)
+    
+    if cover:
+        cover_ext = cover.filename.split(".")[-1] if "." in cover.filename else "jpg"
+        cover_path = f"{APP_NAME}/covers/{beat_id}.{cover_ext}"
+        cover_data = await cover.read()
+        put_object(cover_path, cover_data, cover.content_type or "image/jpeg")
+        update_data["cover_path"] = cover_path
+    
+    if audio:
+        audio_ext = audio.filename.split(".")[-1] if "." in audio.filename else "mp3"
+        audio_path = f"{APP_NAME}/audio/{beat_id}.{audio_ext}"
+        audio_data = await audio.read()
+        put_object(audio_path, audio_data, audio.content_type or "audio/mpeg")
+        update_data["audio_path"] = audio_path
+    
+    if update_data:
+        await db.beats.update_one({"id": beat_id}, {"$set": update_data})
+    
+    updated = await db.beats.find_one({"id": beat_id}, {"_id": 0})
+    return updated
 
 @api_router.delete("/beats/{beat_id}")
 async def delete_beat(beat_id: str, admin: dict = Depends(get_current_admin)):
@@ -483,15 +484,14 @@ async def get_pack(pack_id: str):
 
 @api_router.post("/packs", response_model=PackResponse)
 async def create_pack(
-    title: str = File(...),
-    description: str = File(""),
-    price: float = File(29.99),
+    title: str = Form(...),
+    description: str = Form(""),
+    price: float = Form(29.99),
     cover: UploadFile = File(...),
     admin: dict = Depends(get_current_admin)
 ):
     pack_id = str(uuid.uuid4())
     
-    # Upload cover image
     cover_ext = cover.filename.split(".")[-1] if "." in cover.filename else "jpg"
     cover_path = f"{APP_NAME}/packs/{pack_id}.{cover_ext}"
     cover_data = await cover.read()
@@ -508,6 +508,37 @@ async def create_pack(
     await db.packs.insert_one(pack_doc)
     return pack_doc
 
+@api_router.put("/packs/{pack_id}")
+async def update_pack(
+    pack_id: str,
+    title: str = Form(None),
+    description: str = Form(None),
+    price: float = Form(None),
+    cover: UploadFile = File(None),
+    admin: dict = Depends(get_current_admin)
+):
+    pack = await db.packs.find_one({"id": pack_id}, {"_id": 0})
+    if not pack:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    
+    update_data = {}
+    if title: update_data["title"] = title
+    if description is not None: update_data["description"] = description
+    if price is not None: update_data["price"] = float(price)
+    
+    if cover:
+        cover_ext = cover.filename.split(".")[-1] if "." in cover.filename else "jpg"
+        cover_path = f"{APP_NAME}/packs/{pack_id}.{cover_ext}"
+        cover_data = await cover.read()
+        put_object(cover_path, cover_data, cover.content_type or "image/jpeg")
+        update_data["cover_path"] = cover_path
+    
+    if update_data:
+        await db.packs.update_one({"id": pack_id}, {"$set": update_data})
+    
+    updated = await db.packs.find_one({"id": pack_id}, {"_id": 0})
+    return updated
+
 @api_router.delete("/packs/{pack_id}")
 async def delete_pack(pack_id: str, admin: dict = Depends(get_current_admin)):
     result = await db.packs.delete_one({"id": pack_id})
@@ -520,6 +551,7 @@ async def delete_pack(pack_id: str, admin: dict = Depends(get_current_admin)):
 async def serve_file(file_path: str):
     try:
         data, content_type = get_object(file_path)
+        from fastapi import Response
         return Response(content=data, media_type=content_type)
     except Exception as e:
         logger.error(f"File serve error: {e}")
@@ -532,7 +564,6 @@ async def get_paypal_client_id():
 
 @api_router.get("/paypal/config")
 async def get_paypal_config():
-    """Get PayPal configuration - supports both API and PayPal.me"""
     return {
         "client_id": PAYPAL_CLIENT_ID,
         "paypal_me_username": PAYPAL_ME_USERNAME,
@@ -545,12 +576,7 @@ async def create_payment(data: PaymentCreate):
     if not beat:
         raise HTTPException(status_code=404, detail="Beat not found")
     
-    # Get price based on type
-    price_map = {
-        "mp3": beat["price_mp3"],
-        "wav": beat["price_wav"],
-        "stems": beat["price_stems"]
-    }
+    price_map = {"mp3": beat["price_mp3"], "wav": beat["price_wav"], "stems": beat["price_stems"]}
     price = price_map.get(data.price_type, beat["price_mp3"])
     
     payment_id = str(uuid.uuid4())
@@ -565,25 +591,15 @@ async def create_payment(data: PaymentCreate):
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.payments.insert_one(payment_doc)
-    
     return {"payment_id": payment_id, "status": "completed"}
 
 @api_router.post("/payments/record-manual")
-async def record_manual_payment(
-    beat_id: str,
-    price_type: str,
-    buyer_email: Optional[str] = None
-):
-    """Record a payment made via PayPal.me (manual confirmation)"""
+async def record_manual_payment(beat_id: str, price_type: str, buyer_email: Optional[str] = None):
     beat = await db.beats.find_one({"id": beat_id}, {"_id": 0})
     if not beat:
         raise HTTPException(status_code=404, detail="Beat not found")
     
-    price_map = {
-        "mp3": beat["price_mp3"],
-        "wav": beat["price_wav"],
-        "stems": beat["price_stems"]
-    }
+    price_map = {"mp3": beat["price_mp3"], "wav": beat["price_wav"], "stems": beat["price_stems"]}
     price = price_map.get(price_type, beat["price_mp3"])
     
     payment_id = str(uuid.uuid4())
@@ -599,10 +615,9 @@ async def record_manual_payment(
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.payments.insert_one(payment_doc)
-    
     return {"payment_id": payment_id, "status": "pending_confirmation"}
 
-@api_router.get("/payments", response_model=List[dict])
+@api_router.get("/payments")
 async def get_payments(admin: dict = Depends(get_current_admin)):
     payments = await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return payments
@@ -611,15 +626,16 @@ async def get_payments(admin: dict = Depends(get_current_admin)):
 @api_router.get("/stats")
 async def get_stats(admin: dict = Depends(get_current_admin)):
     total_beats = await db.beats.count_documents({})
+    total_packs = await db.packs.count_documents({})
     total_payments = await db.payments.count_documents({})
     
-    # Use aggregation for better performance
     pipeline = [{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]
     result = await db.payments.aggregate(pipeline).to_list(1)
     total_revenue = result[0]["total"] if result else 0
     
     return {
         "total_beats": total_beats,
+        "total_packs": total_packs,
         "total_payments": total_payments,
         "total_revenue": total_revenue
     }
@@ -627,9 +643,8 @@ async def get_stats(admin: dict = Depends(get_current_admin)):
 # ============== HEALTH CHECK ==============
 @api_router.get("/")
 async def root():
-    return {"message": "r1zl410 Beats API", "version": "2.0", "security": "2FA enabled"}
+    return {"message": "r1zl410 Beats API", "version": "3.0"}
 
-# Include router and middleware
 app.include_router(api_router)
 
 app.add_middleware(

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, LogOut, Trash2, Music, DollarSign, Package } from "lucide-react";
+import { Plus, LogOut, Trash2, Music, DollarSign, Package, Pencil } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -251,20 +251,32 @@ export default function AdminDashboard() {
                             MP3: {formatPrice(beat.price_mp3)} / WAV: {formatPrice(beat.price_wav)}
                           </p>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeleteBeat(beat.id)}
-                          disabled={deletingBeatId === beat.id}
-                          className="text-white/50 hover:text-red-500 hover:bg-red-500/10"
-                          data-testid={`delete-beat-${beat.id}`}
-                        >
-                          {deletingBeatId === beat.id ? (
-                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
+                        <div className="flex gap-1">
+                          <Link to={`/admin/edit-beat/${beat.id}`}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-white/50 hover:text-white hover:bg-white/10"
+                              data-testid={`edit-beat-${beat.id}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteBeat(beat.id)}
+                            disabled={deletingBeatId === beat.id}
+                            className="text-white/50 hover:text-red-500 hover:bg-red-500/10"
+                            data-testid={`delete-beat-${beat.id}`}
+                          >
+                            {deletingBeatId === beat.id ? (
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -316,20 +328,32 @@ export default function AdminDashboard() {
                             {formatPrice(pack.price)}
                           </p>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeletePack(pack.id)}
-                          disabled={deletingPackId === pack.id}
-                          className="text-white/50 hover:text-red-500 hover:bg-red-500/10"
-                          data-testid={`delete-pack-${pack.id}`}
-                        >
-                          {deletingPackId === pack.id ? (
-                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
+                        <div className="flex gap-1">
+                          <Link to={`/admin/edit-pack/${pack.id}`}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-white/50 hover:text-white hover:bg-white/10"
+                              data-testid={`edit-pack-${pack.id}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeletePack(pack.id)}
+                            disabled={deletingPackId === pack.id}
+                            className="text-white/50 hover:text-red-500 hover:bg-red-500/10"
+                            data-testid={`delete-pack-${pack.id}`}
+                          >
+                            {deletingPackId === pack.id ? (
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
