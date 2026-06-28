@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Instagram } from "lucide-react";
+import { Instagram, Youtube } from "lucide-react";
 
 export const Header = () => {
   const location = useLocation();
@@ -26,7 +26,7 @@ export const Header = () => {
         data-testid="site-logo"
         style={{ fontFamily: 'Outfit, sans-serif' }}
       >
-        R1ZL410
+        r1zl410
       </Link>
       
       {/* Navigation */}
@@ -47,17 +47,29 @@ export const Header = () => {
         </Link>
       </nav>
 
-      {/* Instagram */}
-      <a
-        href="https://www.instagram.com/r1zl410/"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-white/70 hover:text-red-500 hover:scale-110 transition-all duration-200"
-        aria-label="Instagram"
-        data-testid="instagram-link"
-      >
-        <Instagram className="h-5 w-5" strokeWidth={1.5} />
-      </a>
+      {/* Social Icons */}
+      <div className="flex items-center gap-4">
+        <a
+          href="https://www.youtube.com/@r1zl410"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-white/70 hover:text-red-500 hover:scale-110 transition-all duration-200"
+          aria-label="YouTube"
+          data-testid="youtube-link"
+        >
+          <Youtube className="h-5 w-5" strokeWidth={1.5} />
+        </a>
+        <a
+          href="https://www.instagram.com/r1zl410/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-white/70 hover:text-red-500 hover:scale-110 transition-all duration-200"
+          aria-label="Instagram"
+          data-testid="instagram-link"
+        >
+          <Instagram className="h-5 w-5" strokeWidth={1.5} />
+        </a>
+      </div>
     </header>
   );
 };
