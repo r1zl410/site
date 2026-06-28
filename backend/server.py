@@ -211,6 +211,15 @@ class PaymentCreate(BaseModel):
     price_type: str  # mp3, wav, stems
     paypal_order_id: str
 
+class PackResponse(BaseModel):
+    id: str
+    title: str
+    description: str = ""
+    cover_path: str = ""
+    cover_url: Optional[str] = None
+    price: float
+    created_at: str
+
 # ============== AUTH HELPERS ==============
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -452,6 +461,53 @@ async def delete_beat(beat_id: str, admin: dict = Depends(get_current_admin)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Beat not found")
     return {"message": "Beat deleted"}
+
+# ============== PACKS ROUTES ==============
+@api_router.get("/packs", response_model=List[PackResponse])
+async def get_packs():
+    packs = await db.packs.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return packs
+
+@api_router.get("/packs/{pack_id}", response_model=PackResponse)
+async def get_pack(pack_id: str):
+    pack = await db.packs.find_one({"id": pack_id}, {"_id": 0})
+    if not pack:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    return pack
+
+@api_router.post("/packs", response_model=PackResponse)
+async def create_pack(
+    title: str = File(...),
+    description: str = File(""),
+    price: float = File(29.99),
+    cover: UploadFile = File(...),
+    admin: dict = Depends(get_current_admin)
+):
+    pack_id = str(uuid.uuid4())
+    
+    # Upload cover image
+    cover_ext = cover.filename.split(".")[-1] if "." in cover.filename else "jpg"
+    cover_path = f"{APP_NAME}/packs/{pack_id}.{cover_ext}"
+    cover_data = await cover.read()
+    put_object(cover_path, cover_data, cover.content_type or "image/jpeg")
+    
+    pack_doc = {
+        "id": pack_id,
+        "title": title,
+        "description": description,
+        "cover_path": cover_path,
+        "price": float(price),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.packs.insert_one(pack_doc)
+    return pack_doc
+
+@api_router.delete("/packs/{pack_id}")
+async def delete_pack(pack_id: str, admin: dict = Depends(get_current_admin)):
+    result = await db.packs.delete_one({"id": pack_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    return {"message": "Pack deleted"}
 
 # ============== FILE SERVING ==============
 @api_router.get("/files/{file_path:path}")

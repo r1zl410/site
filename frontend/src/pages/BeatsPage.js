@@ -6,7 +6,7 @@ import { BeatModal } from "@/components/BeatModal";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-export default function HomePage() {
+export default function BeatsPage() {
   const [beats, setBeats] = useState([]);
   const [selectedBeat, setSelectedBeat] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -49,7 +49,7 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen bg-black overflow-hidden" data-testid="home-page">
+    <main className="min-h-screen bg-black overflow-hidden" data-testid="beats-page">
       <Header />
       
       <BeatsCarousel 
