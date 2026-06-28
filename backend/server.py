@@ -196,6 +196,8 @@ class BeatCreate(BaseModel):
 class BeatResponse(BaseModel):
     id: str
     title: str
+    bpm: Optional[str] = "140"
+    key: Optional[str] = "C Minor"
     cover_path: str = ""
     audio_path: str = ""
     cover_url: Optional[str] = None
@@ -420,6 +422,8 @@ async def get_beat(beat_id: str):
 @api_router.post("/beats", response_model=BeatResponse)
 async def create_beat(
     title: str = File(...),
+    bpm: str = File("140"),
+    key: str = File("C Minor"),
     price_mp3: float = File(29.99),
     price_wav: float = File(49.99),
     price_stems: float = File(99.99),
@@ -444,6 +448,8 @@ async def create_beat(
     beat_doc = {
         "id": beat_id,
         "title": title,
+        "bpm": bpm,
+        "key": key,
         "cover_path": cover_path,
         "audio_path": audio_path,
         "price_mp3": float(price_mp3),

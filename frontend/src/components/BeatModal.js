@@ -263,7 +263,7 @@ export const BeatModal = ({
 
             {/* BPM & Key */}
             <p className="text-white/50 text-sm mb-4">
-              {beat.bpm || "140"} BPM · Key: {beat.key || "Bb Min"}
+              {beat.bpm || "140"} BPM · Key: {beat.key || "C Minor"}
             </p>
 
             {/* Description */}

@@ -6,14 +6,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowLeft, Upload, ImageIcon, Music, X } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+const MUSICAL_KEYS = [
+  "C Major", "C Minor", "C# Major", "C# Minor",
+  "D Major", "D Minor", "D# Major", "D# Minor",
+  "E Major", "E Minor",
+  "F Major", "F Minor", "F# Major", "F# Minor",
+  "G Major", "G Minor", "G# Major", "G# Minor",
+  "A Major", "A Minor", "A# Major", "A# Minor",
+  "B Major", "B Minor",
+  "Bb Major", "Bb Minor", "Eb Major", "Eb Minor", "Ab Major", "Ab Minor"
+];
+
 export default function AdminUpload() {
   const [title, setTitle] = useState("");
-  const [priceMp3, setPriceMp3] = useState("29.99");
-  const [priceWav, setPriceWav] = useState("49.99");
+  const [bpm, setBpm] = useState("140");
+  const [musicalKey, setMusicalKey] = useState("C Minor");
+  const [priceMp3, setPriceMp3] = useState("24.99");
+  const [priceWav, setPriceWav] = useState("39.99");
   const [priceStems, setPriceStems] = useState("99.99");
   const [coverFile, setCoverFile] = useState(null);
   const [audioFile, setAudioFile] = useState(null);
@@ -59,7 +73,7 @@ export default function AdminUpload() {
     e.preventDefault();
 
     if (!coverFile || !audioFile) {
-      toast.error("Please select both cover art and audio file");
+      toast.error("Seleziona sia la cover che il file audio");
       return;
     }
 
@@ -68,6 +82,8 @@ export default function AdminUpload() {
     try {
       const formData = new FormData();
       formData.append("title", title);
+      formData.append("bpm", bpm);
+      formData.append("key", musicalKey);
       formData.append("price_mp3", priceMp3);
       formData.append("price_wav", priceWav);
       formData.append("price_stems", priceStems);
@@ -81,10 +97,10 @@ export default function AdminUpload() {
         }
       });
 
-      toast.success("Beat uploaded successfully!");
+      toast.success("Beat caricato con successo!");
       navigate("/admin");
     } catch (error) {
-      const message = error.response?.data?.detail || "Failed to upload beat";
+      const message = error.response?.data?.detail || "Errore nel caricamento";
       toast.error(message);
     } finally {
       setIsUploading(false);
@@ -104,12 +120,13 @@ export default function AdminUpload() {
         </Link>
         <div>
           <h1 
-            className="text-xl font-semibold text-white tracking-tight"
+            className="text-xl font-semibold text-white tracking-tight flex items-center gap-2"
             style={{ fontFamily: 'Outfit, sans-serif' }}
           >
+            <Music className="h-5 w-5 text-white" />
             Upload Beat
           </h1>
-          <p className="text-sm text-white/50">Add a new beat to your catalog</p>
+          <p className="text-sm text-white/50">Aggiungi un nuovo beat al catalogo</p>
         </div>
       </header>
 
@@ -118,22 +135,55 @@ export default function AdminUpload() {
         <form onSubmit={handleSubmit} className="space-y-8">
           {/* Title */}
           <div className="space-y-2">
-            <Label htmlFor="title" className="text-white/70">Title</Label>
+            <Label htmlFor="title" className="text-white/70">Titolo</Label>
             <Input
               id="title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter beat title"
+              placeholder="es. Midnight Dreams"
               required
               className="bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-white/30"
               data-testid="beat-title-input"
             />
           </div>
 
+          {/* BPM and Key */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="bpm" className="text-white/70">BPM</Label>
+              <Input
+                id="bpm"
+                type="number"
+                min="60"
+                max="200"
+                value={bpm}
+                onChange={(e) => setBpm(e.target.value)}
+                required
+                className="bg-white/5 border-white/10 text-white focus:border-white/30"
+                data-testid="beat-bpm-input"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white/70">Tonalità (Key)</Label>
+              <Select value={musicalKey} onValueChange={setMusicalKey}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-white/10">
+                  {MUSICAL_KEYS.map((key) => (
+                    <SelectItem key={key} value={key} className="text-white hover:bg-white/10">
+                      {key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           {/* Prices */}
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="price_mp3" className="text-white/70">MP3 Price ($)</Label>
+              <Label htmlFor="price_mp3" className="text-white/70">Prezzo MP3 (€)</Label>
               <Input
                 id="price_mp3"
                 type="number"
@@ -147,7 +197,7 @@ export default function AdminUpload() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="price_wav" className="text-white/70">WAV Price ($)</Label>
+              <Label htmlFor="price_wav" className="text-white/70">Prezzo WAV (€)</Label>
               <Input
                 id="price_wav"
                 type="number"
@@ -161,7 +211,7 @@ export default function AdminUpload() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="price_stems" className="text-white/70">Stems Price ($)</Label>
+              <Label htmlFor="price_stems" className="text-white/70">Prezzo Stems (€)</Label>
               <Input
                 id="price_stems"
                 type="number"
@@ -178,7 +228,7 @@ export default function AdminUpload() {
 
           {/* Cover Art */}
           <div className="space-y-2">
-            <Label className="text-white/70">Cover Art (1:1 ratio recommended)</Label>
+            <Label className="text-white/70">Cover Art (1:1)</Label>
             <input
               ref={coverInputRef}
               type="file"
@@ -214,7 +264,7 @@ export default function AdminUpload() {
               >
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <ImageIcon className="h-10 w-10 text-white/30 mb-3" />
-                  <p className="text-sm text-white/50">Click to upload cover art</p>
+                  <p className="text-sm text-white/50">Clicca per caricare la cover</p>
                 </CardContent>
               </Card>
             )}
@@ -222,7 +272,7 @@ export default function AdminUpload() {
 
           {/* Audio File */}
           <div className="space-y-2">
-            <Label className="text-white/70">Audio File (MP3, WAV)</Label>
+            <Label className="text-white/70">File Audio (MP3, WAV)</Label>
             <input
               ref={audioInputRef}
               type="file"
@@ -258,7 +308,7 @@ export default function AdminUpload() {
               >
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Music className="h-10 w-10 text-white/30 mb-3" />
-                  <p className="text-sm text-white/50">Click to upload audio file</p>
+                  <p className="text-sm text-white/50">Clicca per caricare il file audio</p>
                 </CardContent>
               </Card>
             )}
@@ -272,7 +322,7 @@ export default function AdminUpload() {
                 variant="outline" 
                 className="w-full bg-transparent border-white/20 text-white hover:bg-white/10 hover:text-white"
               >
-                Cancel
+                Annulla
               </Button>
             </Link>
             <Button
@@ -284,12 +334,12 @@ export default function AdminUpload() {
               {isUploading ? (
                 <>
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" />
-                  Uploading...
+                  Caricamento...
                 </>
               ) : (
                 <>
                   <Upload className="h-4 w-4" />
-                  Upload Beat
+                  Carica Beat
                 </>
               )}
             </Button>
