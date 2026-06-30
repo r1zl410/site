@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 class BeatsAPITester:
-    def __init__(self, base_url="https://soundwave-gallery.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://vulnscan-first.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.token = None
         self.tests_run = 0
