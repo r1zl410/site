@@ -32,6 +32,7 @@ export default function AdminEditBeat() {
   const [priceStems, setPriceStems] = useState("99.99");
   const [coverFile, setCoverFile] = useState(null);
   const [audioFile, setAudioFile] = useState(null);
+  const [untaggedFile, setUntaggedFile] = useState(null);
   const [coverPreview, setCoverPreview] = useState(null);
   const [currentAudio, setCurrentAudio] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -39,6 +40,7 @@ export default function AdminEditBeat() {
   
   const coverInputRef = useRef(null);
   const audioInputRef = useRef(null);
+  const untaggedInputRef = useRef(null);
   const navigate = useNavigate();
 
   const getAuthHeaders = () => {
@@ -103,6 +105,13 @@ export default function AdminEditBeat() {
     }
   };
 
+  const handleUntaggedChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setUntaggedFile(file);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSaving(true);
@@ -121,6 +130,9 @@ export default function AdminEditBeat() {
       }
       if (audioFile) {
         formData.append("audio", audioFile);
+      }
+      if (untaggedFile) {
+        formData.append("audio_untagged", untaggedFile);
       }
 
       await axios.put(`${API}/beats/${beatId}`, formData, {
@@ -281,7 +293,7 @@ export default function AdminEditBeat() {
           </div>
 
           <div className="space-y-2">
-            <Label className="text-white/70">File Audio</Label>
+            <Label className="text-white/70">Audio Anteprima — CON TAG (pubblico)</Label>
             <input
               ref={audioInputRef}
               type="file"
@@ -306,6 +318,38 @@ export default function AdminEditBeat() {
                   className="bg-transparent border-white/20 text-white hover:bg-white/10"
                 >
                   Cambia
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-white/70">Audio Completo — SENZA TAG (a pagamento)</Label>
+            <p className="text-xs text-white/40">Consegnato al cliente solo dopo la conferma del pagamento. Carica/Sostituisci se necessario.</p>
+            <input
+              ref={untaggedInputRef}
+              type="file"
+              accept="audio/*"
+              onChange={handleUntaggedChange}
+              className="hidden"
+            />
+
+            <Card className="bg-white/5 border-white/10">
+              <CardContent className="flex items-center justify-between p-4">
+                <div className="flex items-center gap-3">
+                  <Music className="h-5 w-5 text-emerald-400" />
+                  <span className="text-sm text-white">
+                    {untaggedFile ? untaggedFile.name : "Versione senza tag"}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => untaggedInputRef.current?.click()}
+                  className="bg-transparent border-emerald-500/30 text-white hover:bg-emerald-500/10"
+                >
+                  Carica
                 </Button>
               </CardContent>
             </Card>

@@ -5,17 +5,19 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, LogOut, Trash2, Music, DollarSign, Package, Pencil } from "lucide-react";
+import { Plus, LogOut, Trash2, Music, DollarSign, Package, Pencil, ShoppingCart, CheckCircle, Clock } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function AdminDashboard() {
   const [beats, setBeats] = useState([]);
   const [packs, setPacks] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [stats, setStats] = useState({ total_beats: 0, total_payments: 0, total_revenue: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [deletingBeatId, setDeletingBeatId] = useState(null);
   const [deletingPackId, setDeletingPackId] = useState(null);
+  const [confirmingId, setConfirmingId] = useState(null);
   const navigate = useNavigate();
 
   const getAuthHeaders = () => {
@@ -32,14 +34,16 @@ export default function AdminDashboard() {
       }
 
       try {
-        const [beatsRes, packsRes, statsRes] = await Promise.all([
+        const [beatsRes, packsRes, statsRes, paymentsRes] = await Promise.all([
           axios.get(`${API}/beats`),
           axios.get(`${API}/packs`),
-          axios.get(`${API}/stats`, { headers: getAuthHeaders() })
+          axios.get(`${API}/stats`, { headers: getAuthHeaders() }),
+          axios.get(`${API}/payments`, { headers: getAuthHeaders() })
         ]);
         setBeats(beatsRes.data);
         setPacks(packsRes.data);
         setStats(statsRes.data);
+        setPayments(paymentsRes.data);
       } catch (error) {
         if (error.response?.status === 401) {
           localStorage.removeItem("admin_token");
@@ -96,6 +100,35 @@ export default function AdminDashboard() {
       style: "currency",
       currency: "EUR"
     }).format(amount);
+  };
+
+  const handleConfirmPayment = async (paymentId) => {
+    if (!window.confirm("Confermi di aver ricevuto il pagamento? Il cliente ricevera' una email con il link per scaricare il file senza tag.")) return;
+
+    setConfirmingId(paymentId);
+    try {
+      const res = await axios.post(`${API}/payments/${paymentId}/confirm`, {}, { headers: getAuthHeaders() });
+      setPayments((prev) => prev.map((p) => p.id === paymentId ? { ...p, status: "confirmed" } : p));
+      if (res.data.email_sent) {
+        toast.success("Pagamento confermato! Email inviata al cliente.");
+      } else {
+        toast.warning("Pagamento confermato, ma l'email non e' stata inviata. Controlla la configurazione email.");
+      }
+    } catch (error) {
+      const message = error.response?.data?.detail || "Errore nella conferma";
+      toast.error(message);
+    } finally {
+      setConfirmingId(null);
+    }
+  };
+
+  const formatDate = (iso) => {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
+    } catch {
+      return iso;
+    }
   };
 
   const getCoverUrl = (item) => {
@@ -195,6 +228,10 @@ export default function AdminDashboard() {
               <TabsTrigger value="packs" className="data-[state=active]:bg-white data-[state=active]:text-black">
                 <Package className="h-4 w-4 mr-2" />
                 Packs
+              </TabsTrigger>
+              <TabsTrigger value="orders" className="data-[state=active]:bg-white data-[state=active]:text-black">
+                <ShoppingCart className="h-4 w-4 mr-2" />
+                Ordini
               </TabsTrigger>
             </TabsList>
             
@@ -354,6 +391,63 @@ export default function AdminDashboard() {
                             )}
                           </Button>
                         </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Orders Tab */}
+          <TabsContent value="orders">
+            {payments.length === 0 ? (
+              <Card className="bg-white/5 border-white/10">
+                <CardContent className="flex flex-col items-center justify-center py-16">
+                  <ShoppingCart className="h-12 w-12 text-white/30 mb-4" />
+                  <p className="text-lg text-white/50">Nessun ordine ricevuto</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {payments.map((p) => (
+                  <Card
+                    key={p.id}
+                    className="bg-white/5 border-white/10"
+                    data-testid={`order-card-${p.id}`}
+                  >
+                    <CardContent className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-medium text-white truncate">{p.beat_title || "Beat"}</h3>
+                          <span className="text-xs text-white/40 uppercase">{p.license_label || p.price_type}</span>
+                        </div>
+                        <p className="text-sm text-white/50 truncate">{p.buyer_email || "—"}</p>
+                        <p className="text-xs text-white/30">{formatDate(p.created_at)}</p>
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <span className="text-white font-medium">{formatPrice(p.amount)}</span>
+                        {p.status === "confirmed" ? (
+                          <span className="flex items-center gap-1 text-emerald-400 text-sm">
+                            <CheckCircle className="h-4 w-4" />
+                            Confermato
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            onClick={() => handleConfirmPayment(p.id)}
+                            disabled={confirmingId === p.id}
+                            className="gap-2 bg-emerald-500 text-white hover:bg-emerald-600 rounded-full"
+                            data-testid={`confirm-payment-${p.id}`}
+                          >
+                            {confirmingId === p.id ? (
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                            ) : (
+                              <Clock className="h-4 w-4" />
+                            )}
+                            Conferma pagamento
+                          </Button>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

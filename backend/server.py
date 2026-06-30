@@ -50,6 +50,21 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
 resend.api_key = RESEND_API_KEY
 
+# Public frontend base URL (used to build download links in emails).
+# Derived from the first configured CORS origin.
+FRONTEND_BASE = next(
+    (o.strip() for o in os.environ.get('CORS_ORIGINS', '').split(',')
+     if o.strip() and o.strip() != '*'),
+    ''
+)
+
+# Secure download configuration
+DOWNLOAD_EXPIRY_DAYS = 3
+MAX_DOWNLOADS = 2
+# Storage prefix for the untagged (paid) audio files. These must NEVER be
+# served through the public /api/files endpoint.
+PROTECTED_PREFIX = f"{APP_NAME}/full/"
+
 # Rate limiting storage
 login_attempts = defaultdict(list)
 MAX_LOGIN_ATTEMPTS = 5
@@ -131,6 +146,44 @@ async def send_verification_email(email: str, code: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
+        return False
+
+async def send_download_email(email: str, beat_title: str, license_label: str, download_url: str) -> bool:
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set")
+        return False
+
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #000; text-align: center;">r1zl410</h2>
+        <p style="color: #333;">Grazie per il tuo acquisto! Il tuo pagamento e' stato confermato.</p>
+        <div style="background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0;">
+            <p style="margin: 0 0 6px 0; color: #000; font-weight: bold;">{beat_title}</p>
+            <p style="margin: 0; color: #666;">Licenza: {license_label}</p>
+        </div>
+        <div style="text-align: center; margin: 28px 0;">
+            <a href="{download_url}" style="background: #000; color: #fff; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: bold; display: inline-block;">Scarica il tuo file</a>
+        </div>
+        <p style="color: #999; font-size: 12px; text-align: center;">
+            Il link scade tra {DOWNLOAD_EXPIRY_DAYS} giorni e consente fino a {MAX_DOWNLOADS} download.<br>
+            Non condividere questo link con altri.
+        </p>
+    </div>
+    """
+
+    params = {
+        "from": SENDER_EMAIL,
+        "to": [email],
+        "subject": f"r1zl410 - Il tuo download: {beat_title}",
+        "html": html_content
+    }
+
+    try:
+        await asyncio.to_thread(resend.Emails.send, params)
+        logger.info(f"Download email sent to {email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send download email: {e}")
         return False
 
 # ============== OBJECT STORAGE ==============
@@ -387,6 +440,7 @@ async def create_beat(
     price_stems: float = Form(99.99),
     cover: UploadFile = File(...),
     audio: UploadFile = File(...),
+    audio_untagged: UploadFile = File(None),
     admin: dict = Depends(get_current_admin)
 ):
     beat_id = str(uuid.uuid4())
@@ -396,10 +450,19 @@ async def create_beat(
     cover_data = await cover.read()
     put_object(cover_path, cover_data, cover.content_type or "image/jpeg")
     
+    # Tagged (public preview) audio
     audio_ext = audio.filename.split(".")[-1] if "." in audio.filename else "mp3"
     audio_path = f"{APP_NAME}/audio/{beat_id}.{audio_ext}"
     audio_data = await audio.read()
     put_object(audio_path, audio_data, audio.content_type or "audio/mpeg")
+    
+    # Untagged (paid / full) audio - stored under protected prefix, never public
+    full_audio_path = ""
+    if audio_untagged:
+        full_ext = audio_untagged.filename.split(".")[-1] if "." in audio_untagged.filename else "mp3"
+        full_audio_path = f"{APP_NAME}/full/{beat_id}.{full_ext}"
+        full_data = await audio_untagged.read()
+        put_object(full_audio_path, full_data, audio_untagged.content_type or "audio/mpeg")
     
     beat_doc = {
         "id": beat_id,
@@ -408,6 +471,7 @@ async def create_beat(
         "key": key,
         "cover_path": cover_path,
         "audio_path": audio_path,
+        "full_audio_path": full_audio_path,
         "price_mp3": float(price_mp3),
         "price_wav": float(price_wav),
         "price_stems": float(price_stems),
@@ -428,6 +492,7 @@ async def update_beat(
     price_stems: float = Form(None),
     cover: UploadFile = File(None),
     audio: UploadFile = File(None),
+    audio_untagged: UploadFile = File(None),
     admin: dict = Depends(get_current_admin)
 ):
     beat = await db.beats.find_one({"id": beat_id}, {"_id": 0})
@@ -455,6 +520,13 @@ async def update_beat(
         audio_data = await audio.read()
         put_object(audio_path, audio_data, audio.content_type or "audio/mpeg")
         update_data["audio_path"] = audio_path
+
+    if audio_untagged:
+        full_ext = audio_untagged.filename.split(".")[-1] if "." in audio_untagged.filename else "mp3"
+        full_audio_path = f"{APP_NAME}/full/{beat_id}.{full_ext}"
+        full_data = await audio_untagged.read()
+        put_object(full_audio_path, full_data, audio_untagged.content_type or "audio/mpeg")
+        update_data["full_audio_path"] = full_audio_path
     
     if update_data:
         await db.beats.update_one({"id": beat_id}, {"$set": update_data})
@@ -549,8 +621,15 @@ async def delete_pack(pack_id: str, admin: dict = Depends(get_current_admin)):
 # ============== FILE SERVING ==============
 @api_router.get("/files/{file_path:path}")
 async def serve_file(file_path: str):
+    # Never serve the untagged/paid files through the public endpoint.
+    normalized = file_path.lstrip("/")
+    if normalized.startswith(PROTECTED_PREFIX) or "/full/" in f"/{normalized}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    # Basic path-traversal guard
+    if ".." in normalized:
+        raise HTTPException(status_code=400, detail="Invalid path")
     try:
-        data, content_type = get_object(file_path)
+        data, content_type = get_object(normalized)
         from fastapi import Response
         return Response(content=data, media_type=content_type)
     except Exception as e:
@@ -570,31 +649,13 @@ async def get_paypal_config():
         "use_paypal_me": bool(PAYPAL_ME_USERNAME and not PAYPAL_CLIENT_ID)
     }
 
-@api_router.post("/payments/create")
-async def create_payment(data: PaymentCreate):
-    beat = await db.beats.find_one({"id": data.beat_id}, {"_id": 0})
-    if not beat:
-        raise HTTPException(status_code=404, detail="Beat not found")
-    
-    price_map = {"mp3": beat["price_mp3"], "wav": beat["price_wav"], "stems": beat["price_stems"]}
-    price = price_map.get(data.price_type, beat["price_mp3"])
-    
-    payment_id = str(uuid.uuid4())
-    payment_doc = {
-        "id": payment_id,
-        "beat_id": data.beat_id,
-        "beat_title": beat.get("title", ""),
-        "price_type": data.price_type,
-        "amount": price,
-        "paypal_order_id": data.paypal_order_id,
-        "status": "completed",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.payments.insert_one(payment_doc)
-    return {"payment_id": payment_id, "status": "completed"}
+LICENSE_LABELS = {"mp3": "MP3 Lease", "wav": "WAV Lease", "stems": "Stems (Trackout)"}
 
 @api_router.post("/payments/record-manual")
-async def record_manual_payment(beat_id: str, price_type: str, buyer_email: Optional[str] = None):
+async def record_manual_payment(beat_id: str, price_type: str, buyer_email: str):
+    if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', buyer_email or ""):
+        raise HTTPException(status_code=400, detail="Valid email required")
+
     beat = await db.beats.find_one({"id": beat_id}, {"_id": 0})
     if not beat:
         raise HTTPException(status_code=404, detail="Beat not found")
@@ -608,14 +669,110 @@ async def record_manual_payment(beat_id: str, price_type: str, buyer_email: Opti
         "beat_id": beat_id,
         "beat_title": beat.get("title", ""),
         "price_type": price_type,
+        "license_label": LICENSE_LABELS.get(price_type, price_type),
         "amount": price,
         "payment_method": "paypal_me",
-        "buyer_email": buyer_email,
+        "buyer_email": buyer_email.lower(),
         "status": "pending_confirmation",
+        "download_token": None,
+        "download_count": 0,
+        "token_expires": None,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.payments.insert_one(payment_doc)
     return {"payment_id": payment_id, "status": "pending_confirmation"}
+
+@api_router.post("/payments/{payment_id}/confirm")
+async def confirm_payment(payment_id: str, admin: dict = Depends(get_current_admin)):
+    payment = await db.payments.find_one({"id": payment_id}, {"_id": 0})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if not payment.get("buyer_email"):
+        raise HTTPException(status_code=400, detail="Payment has no buyer email")
+
+    beat = await db.beats.find_one({"id": payment["beat_id"]}, {"_id": 0})
+    if not beat or not beat.get("full_audio_path"):
+        raise HTTPException(status_code=400, detail="Untagged file not available for this beat")
+
+    token = str(uuid.uuid4())
+    expires = datetime.now(timezone.utc) + timedelta(days=DOWNLOAD_EXPIRY_DAYS)
+    await db.payments.update_one(
+        {"id": payment_id},
+        {"$set": {
+            "status": "confirmed",
+            "download_token": token,
+            "download_count": 0,
+            "token_expires": expires.isoformat(),
+            "confirmed_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+
+    download_url = f"{FRONTEND_BASE}/download/{token}"
+    email_sent = await send_download_email(
+        payment["buyer_email"],
+        payment.get("beat_title", "Beat"),
+        payment.get("license_label", payment.get("price_type", "")),
+        download_url
+    )
+    return {"status": "confirmed", "email_sent": email_sent, "download_token": token}
+
+@api_router.get("/download/{token}/info")
+async def download_info(token: str):
+    payment = await db.payments.find_one({"download_token": token}, {"_id": 0})
+    if not payment or payment.get("status") != "confirmed":
+        return {"valid": False, "reason": "not_found"}
+
+    expires = payment.get("token_expires")
+    if expires and datetime.now(timezone.utc) > datetime.fromisoformat(expires):
+        return {"valid": False, "reason": "expired"}
+
+    downloads_left = MAX_DOWNLOADS - payment.get("download_count", 0)
+    if downloads_left <= 0:
+        return {"valid": False, "reason": "limit_reached"}
+
+    return {
+        "valid": True,
+        "beat_title": payment.get("beat_title", ""),
+        "license_label": payment.get("license_label", payment.get("price_type", "")),
+        "expires_at": expires,
+        "downloads_left": downloads_left
+    }
+
+@api_router.get("/download/{token}")
+async def download_file(token: str):
+    payment = await db.payments.find_one({"download_token": token}, {"_id": 0})
+    if not payment or payment.get("status") != "confirmed":
+        raise HTTPException(status_code=404, detail="Invalid download link")
+
+    expires = payment.get("token_expires")
+    if expires and datetime.now(timezone.utc) > datetime.fromisoformat(expires):
+        raise HTTPException(status_code=410, detail="Download link expired")
+
+    if payment.get("download_count", 0) >= MAX_DOWNLOADS:
+        raise HTTPException(status_code=410, detail="Download limit reached")
+
+    beat = await db.beats.find_one({"id": payment["beat_id"]}, {"_id": 0})
+    if not beat or not beat.get("full_audio_path"):
+        raise HTTPException(status_code=404, detail="File not available")
+
+    try:
+        data, content_type = get_object(beat["full_audio_path"])
+    except Exception as e:
+        logger.error(f"Download serve error: {e}")
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Count this download
+    await db.payments.update_one({"id": payment["id"]}, {"$inc": {"download_count": 1}})
+
+    from fastapi import Response
+    ext = beat["full_audio_path"].split(".")[-1]
+    safe_title = re.sub(r'[^A-Za-z0-9_-]+', '_', beat.get("title", "beat")) or "beat"
+    filename = f"{safe_title}.{ext}"
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 @api_router.get("/payments")
 async def get_payments(admin: dict = Depends(get_current_admin)):

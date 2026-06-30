@@ -31,11 +31,13 @@ export default function AdminUpload() {
   const [priceStems, setPriceStems] = useState("99.99");
   const [coverFile, setCoverFile] = useState(null);
   const [audioFile, setAudioFile] = useState(null);
+  const [untaggedFile, setUntaggedFile] = useState(null);
   const [coverPreview, setCoverPreview] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   
   const coverInputRef = useRef(null);
   const audioInputRef = useRef(null);
+  const untaggedInputRef = useRef(null);
   const navigate = useNavigate();
 
   const getAuthHeaders = () => {
@@ -69,11 +71,22 @@ export default function AdminUpload() {
     }
   };
 
+  const handleUntaggedChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setUntaggedFile(file);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (!coverFile || !audioFile) {
-      toast.error("Seleziona sia la cover che il file audio");
+      toast.error("Seleziona sia la cover che il file audio con tag");
+      return;
+    }
+    if (!untaggedFile) {
+      toast.error("Carica anche la versione SENZA tag (consegnata dopo il pagamento)");
       return;
     }
 
@@ -89,6 +102,7 @@ export default function AdminUpload() {
       formData.append("price_stems", priceStems);
       formData.append("cover", coverFile);
       formData.append("audio", audioFile);
+      formData.append("audio_untagged", untaggedFile);
 
       await axios.post(`${API}/beats`, formData, {
         headers: {
@@ -270,9 +284,10 @@ export default function AdminUpload() {
             )}
           </div>
 
-          {/* Audio File */}
+          {/* Audio File (tagged preview) */}
           <div className="space-y-2">
-            <Label className="text-white/70">File Audio (MP3, WAV)</Label>
+            <Label className="text-white/70">Audio Anteprima — CON TAG (pubblico)</Label>
+            <p className="text-xs text-white/40">Questa versione viene riprodotta sul sito da tutti.</p>
             <input
               ref={audioInputRef}
               type="file"
@@ -308,7 +323,52 @@ export default function AdminUpload() {
               >
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Music className="h-10 w-10 text-white/30 mb-3" />
-                  <p className="text-sm text-white/50">Clicca per caricare il file audio</p>
+                  <p className="text-sm text-white/50">Clicca per caricare l'audio con tag</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Untagged Audio File (paid / delivered after payment) */}
+          <div className="space-y-2">
+            <Label className="text-white/70">Audio Completo — SENZA TAG (a pagamento)</Label>
+            <p className="text-xs text-white/40">Non e' mai pubblico. Consegnato al cliente solo dopo la conferma del pagamento.</p>
+            <input
+              ref={untaggedInputRef}
+              type="file"
+              accept="audio/*"
+              onChange={handleUntaggedChange}
+              className="hidden"
+              data-testid="untagged-file-input"
+            />
+
+            {untaggedFile ? (
+              <Card className="bg-white/5 border-white/10">
+                <CardContent className="flex items-center justify-between p-4">
+                  <div className="flex items-center gap-3">
+                    <Music className="h-5 w-5 text-emerald-400" />
+                    <span className="text-sm text-white truncate max-w-xs">
+                      {untaggedFile.name}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUntaggedFile(null)}
+                    className="p-1 text-white/50 hover:text-white"
+                    data-testid="remove-untagged-btn"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card
+                onClick={() => untaggedInputRef.current?.click()}
+                className="border-dashed border-2 border-emerald-500/30 bg-transparent cursor-pointer hover:border-emerald-500/50"
+              >
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Music className="h-10 w-10 text-emerald-400/40 mb-3" />
+                  <p className="text-sm text-white/50">Clicca per caricare l'audio senza tag</p>
                 </CardContent>
               </Card>
             )}
@@ -327,7 +387,7 @@ export default function AdminUpload() {
             </Link>
             <Button
               type="submit"
-              disabled={isUploading || !coverFile || !audioFile || !title}
+              disabled={isUploading || !coverFile || !audioFile || !untaggedFile || !title}
               className="flex-1 gap-2 bg-white text-black hover:bg-white/90 rounded-full"
               data-testid="upload-submit-btn"
             >

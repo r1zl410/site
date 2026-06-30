@@ -161,7 +161,7 @@ export const BeatModal = ({
     // Open PayPal.me
     const paypalMeUrl = `https://paypal.me/${paypalConfig.paypal_me_username}/${price}EUR`;
     window.open(paypalMeUrl, '_blank');
-    toast.success("PayPal aperto! Completa il pagamento.");
+    toast.success("PayPal aperto! Dopo il pagamento riceverai via email il link per scaricare il file (entro poche ore).", { duration: 8000 });
   };
 
   if (!beat) return null;
