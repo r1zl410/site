@@ -647,10 +647,19 @@ async def root():
 
 app.include_router(api_router)
 
+# Restrict CORS to explicitly configured origins.
+# Note: combining a wildcard ("*") with allow_credentials=True is insecure/invalid,
+# so we only enable credentials when specific origins are configured.
+_cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '').split(',') if o.strip()]
+_allow_credentials = True
+if not _cors_origins or "*" in _cors_origins:
+    _cors_origins = ["*"]
+    _allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=_allow_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
