@@ -1,18 +1,21 @@
 # Test Credentials
 
-## Admin (seeded for automated testing only)
+## Admin (for automated testing only)
+Admin login uses 2FA (a 6-digit email code), so password login can't be completed
+by automated tests. For testing admin-protected endpoints, (re)create a test admin
+and get a valid JWT by running:
+
+    python /app/scripts/seed_admin.py
+
+It prints ADMIN_EMAIL / ADMIN_PASSWORD / JWT_TOKEN. Use the JWT as:
+
+    Authorization: Bearer <JWT_TOKEN>
+
+Seed admin values:
 - Email: test.admin@r1zl410.dev
 - Password: TestAdmin#2025
 - Admin ID: test-admin-0000-0000-000000000001
 
-NOTE: Admin login uses 2FA (a 6-digit email code), so password login can't be
-completed by automated tests. Use the pre-generated JWT below as a Bearer token
-for admin-protected endpoints.
-
-### Pre-generated JWT (valid 24h from seeding; re-run `python /app/scripts/seed_admin.py` to refresh)
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbl9pZCI6InRlc3QtYWRtaW4tMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImV4cCI6MTc4Mjk0ODY2N30.IkGU8HmWuUUlx3Z5mLyQECMicooYMUR4vtLPUCmnWZk
-
-To regenerate the token: `python /app/scripts/seed_admin.py` (prints JWT_TOKEN).
-
-IMPORTANT: This is a TEST admin. Because the app allows only one admin, this seed
-admin must be removed before the real owner registers their own admin account.
+IMPORTANT: The app allows only ONE admin. The test admin (and any test beats/
+payments) are cleaned from the DB after testing so the real owner can register
+their own admin via /admin/login. Re-run the seed script before each test session.
